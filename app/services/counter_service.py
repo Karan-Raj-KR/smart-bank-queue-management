@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.models.counter import Counter
 from app.models.service_type import ServiceType
@@ -13,6 +14,14 @@ from app.schemas.counter import (
     QueueStatusResponse,
     TokenInfo,
 )
+from app.tasks.notifications import send_sms
+
+
+async def _send_sms_notification(to_phone: str, token_number: str) -> None:
+    await send_sms(
+        to_phone,
+        f"Your token {token_number} will be called soon. Please proceed to the bank.",
+    )
 
 
 async def call_next_token(counter_id: int, db: AsyncSession) -> CallNextResponse:
@@ -51,11 +60,43 @@ async def call_next_token(counter_id: int, db: AsyncSession) -> CallNextResponse
         next_token.called_at = datetime.now(timezone.utc)
         next_token.counter_id = counter_id
 
-    return CallNextResponse(
+    response = CallNextResponse(
         counter_id=counter_id,
         current_token=TokenInfo.model_validate(current_token) if current_token else None,
         next_token=TokenInfo.model_validate(next_token) if next_token else None,
     )
+
+    if next_token:
+        from app.routers.websocket import manager
+
+        await manager.broadcast_to_branch(
+            counter.branch_id,
+            {
+                "event": "token_called",
+                "token_number": next_token.token_number,
+                "counter_id": counter_id,
+            },
+        )
+
+        # Notify the customer 3 positions ahead in the queue
+        result = await db.execute(
+            select(Token)
+            .where(
+                Token.branch_id == counter.branch_id,
+                Token.service_type == next_token.service_type,
+                Token.status == TokenStatus.WAITING,
+                Token.id != next_token.id,
+            )
+            .order_by(Token.is_priority.desc(), Token.issued_at.asc())
+            .offset(2)
+            .limit(1)
+            .options(joinedload(Token.customer))
+        )
+        upcoming_token = result.scalar_one_or_none()
+        if upcoming_token and upcoming_token.customer.phone:
+            await _send_sms_notification(upcoming_token.customer.phone, upcoming_token.token_number)
+
+    return response
 
 
 async def get_queue_status(branch_id: int, db: AsyncSession) -> QueueStatusResponse:
