@@ -1,12 +1,13 @@
 from fastapi import FastAPI
 
-from app.routers import counter, token, websocket
+from app.routers import analytics, counter, token, websocket
 
 app = FastAPI(title="Smart Bank Queue Management", version="0.1.0")
 
 app.include_router(token.router)
 app.include_router(counter.router)
 app.include_router(websocket.router)
+app.include_router(analytics.router)
 
 
 @app.get("/")

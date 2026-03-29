@@ -66,7 +66,9 @@ async def generate_token(db: AsyncSession, data: TokenCreate) -> TokenResponse:
     await db.flush()
 
     position = await _queue_position(db, data.branch_id, data.service_type, token.id)
-    estimated_wait_minutes = position * 5
+
+    from app.services.prediction import predict_wait_time
+    estimated_wait_minutes = predict_wait_time(position, data.service_type.value)
 
     return TokenResponse(
         token_number=token.token_number,
