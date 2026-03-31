@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -8,6 +9,13 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/bankqueue"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def ensure_asyncpg_scheme(cls, v: str) -> str:
+        v = v.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+        v = v.replace("postgresql://", "postgresql+asyncpg://")
+        return v
 
     # Redis
     redis_url: str = "redis://localhost:6379"
