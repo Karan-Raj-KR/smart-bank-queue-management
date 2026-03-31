@@ -6,7 +6,7 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 
 # Import Base and all models so autogenerate can detect them
-from app.core.database import Base
+from app.core.base import Base
 import app.models  # noqa: F401 — registers all models on Base.metadata
 
 config = context.config
