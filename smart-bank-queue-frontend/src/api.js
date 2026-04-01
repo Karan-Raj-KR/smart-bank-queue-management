@@ -3,6 +3,7 @@ import axios from 'axios';
 const PROD_URL = 'https://smart-bank-queue-management-production.up.railway.app';
 const baseURL = import.meta.env.DEV ? '/api' : PROD_URL;
 
+
 const api = axios.create({
   baseURL,
   timeout: 15000,
