@@ -44,11 +44,20 @@ class CallNextResponse(BaseModel):
 
 class QueueEntry(BaseModel):
     token_number: str
+    service_type: str
     is_priority: bool
     position: int
     issued_at: datetime
 
 
+class CounterServing(BaseModel):
+    token_number: str
+    service_type: str
+    is_priority: bool
+    counter_id: int
+
+
 class QueueStatusResponse(BaseModel):
     branch_id: int
-    queue: dict[str, list[QueueEntry]]
+    waiting_queue: list[QueueEntry]
+    counters: dict[int, CounterServing | None]

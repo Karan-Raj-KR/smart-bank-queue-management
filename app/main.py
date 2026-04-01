@@ -1,3 +1,5 @@
+import os
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
@@ -11,9 +13,14 @@ from app.routers.branch import router as branch_router
 
 app = FastAPI(title="Smart Bank Queue Management", version="0.1.0")
 
+_allowed_origins = os.environ.get(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:3000",
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,6 +41,28 @@ async def hello_world():
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.on_event("startup")
+async def auto_seed():
+    from app.core.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Branch).limit(1))
+        if result.scalar_one_or_none() is not None:
+            return
+
+        branch = Branch(name="Main Branch", address="MG Road, Bangalore")
+        db.add(branch)
+        await db.flush()
+
+        default_counter = Counter(
+            branch_id=branch.id,
+            name="Counter 1",
+            service_types=["CASH", "WITHDRAWAL", "LOAN", "ACCOUNT"],
+        )
+        db.add(default_counter)
+        await db.commit()
 
 
 @app.post("/seed")

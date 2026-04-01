@@ -1,6 +1,10 @@
+import base64
+import io
+import json
 import logging
 from datetime import date, datetime
 
+import qrcode
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +44,17 @@ async def _next_token_number(
     return f"{prefix}{count + 1:03d}"
 
 
+def _generate_qr_data_url(data: dict) -> str:
+    qr = qrcode.QRCode(version=1, box_size=10, border=2)
+    qr.add_data(json.dumps(data))
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    b64 = base64.b64encode(buffer.getvalue()).decode()
+    return f"data:image/png;base64,{b64}"
+
+
 async def _queue_position(
     db: AsyncSession, branch_id: int, service_type: ServiceType, token_id: int
 ) -> int:
@@ -75,11 +90,21 @@ async def generate_token(db: AsyncSession, data: TokenCreate) -> TokenResponse:
         from app.services.prediction import predict_wait_time
         estimated_wait_minutes = predict_wait_time(position, data.service_type.value)
 
+        qr_data = {
+            "token": token.token_number,
+            "branch": data.branch_id,
+            "service": data.service_type.value,
+            "position": position,
+        }
+        qr_code = _generate_qr_data_url(qr_data)
+
         return TokenResponse(
             token_number=token.token_number,
+            service_type=data.service_type.value,
             position=position,
             estimated_wait_minutes=estimated_wait_minutes,
             status=token.status,
+            qr_code=qr_code,
         )
     except HTTPException:
         raise
@@ -93,5 +118,5 @@ async def generate_token(db: AsyncSession, data: TokenCreate) -> TokenResponse:
         )
         raise HTTPException(
             status_code=500,
-            detail=f"Token generation failed: {type(exc).__name__}: {exc}",
+            detail="Token generation failed. Please try again.",
         )

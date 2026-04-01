@@ -1,4 +1,8 @@
+import logging
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -17,8 +21,15 @@ class ConnectionManager:
             connections.remove(websocket)
 
     async def broadcast_to_branch(self, branch_id: int, message: dict):
+        stale = []
         for connection in self.active_connections.get(branch_id, []):
-            await connection.send_json(message)
+            try:
+                await connection.send_json(message)
+            except Exception:
+                stale.append(connection)
+                logger.debug("Removing stale WebSocket for branch %s", branch_id)
+        for ws in stale:
+            self.disconnect(ws, branch_id)
 
 
 manager = ConnectionManager()

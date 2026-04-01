@@ -1,6 +1,5 @@
 import { Routes, Route } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { Wifi, WifiOff } from 'lucide-react'
 import { checkHealth } from './api'
 import Home from './pages/Home'
 import Customer from './pages/Customer'

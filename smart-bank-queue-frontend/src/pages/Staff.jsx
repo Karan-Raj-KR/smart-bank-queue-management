@@ -133,15 +133,20 @@ export default function Staff() {
              </div>
 
              {/* Serving Status Card - Exaggerated Minimalism */}
-             <div className="luxury-card border-none text-center relative py-12 px-6">
-               <p className="text-[10px] text-primary-500 font-bold uppercase tracking-[0.2em] mb-4">Currently Serving</p>
-               <h2 className="text-[6rem] leading-none serif-heading font-black text-primary-900 tracking-tighter mb-6">
-                 {queueStatus?.counters?.[counterId]?.token_number || '--'}
-               </h2>
-               <div className={`inline-flex items-center justify-center rounded-sm px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest border-2 w-auto mx-auto ${queueStatus?.counters?.[counterId] ? 'border-primary-900 text-primary-900' : 'border-slate-300 text-slate-500'}`}>
-                 {queueStatus?.counters?.[counterId] ? 'IN PROGRESS' : 'IDLE'}
-               </div>
-             </div>
+             {(() => {
+               const serving = queueStatus?.counters?.[counterId]
+               return (
+                 <div className="luxury-card border-none text-center relative py-12 px-6">
+                   <p className="text-[10px] text-primary-500 font-bold uppercase tracking-[0.2em] mb-4">Currently Serving</p>
+                   <h2 className="text-[6rem] leading-none serif-heading font-black text-primary-900 tracking-tighter mb-6">
+                     {serving?.token_number || '--'}
+                   </h2>
+                   <div className={`inline-flex items-center justify-center rounded-sm px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest border-2 w-auto mx-auto ${serving ? 'border-primary-900 text-primary-900' : 'border-slate-300 text-slate-500'}`}>
+                     {serving ? 'IN PROGRESS' : 'IDLE'}
+                   </div>
+                 </div>
+               )
+             })()}
 
              <button 
                onClick={handleCallNext}
@@ -168,7 +173,7 @@ export default function Staff() {
                </div>
 
                <div className="space-y-4">
-                 {queueStatus?.waiting_queue?.map((token, index) => (
+                 {(queueStatus?.waiting_queue || []).map((token, index) => (
                    <div key={token.token_number} className="flex justify-between items-center p-5 bg-white rounded-xl shadow-luxury-sm border border-slate-100 hover:shadow-luxury-md transition-shadow group">
                       <div className="flex items-center gap-6">
                         <div className="w-12 h-12 rounded bg-surface flex items-center justify-center">

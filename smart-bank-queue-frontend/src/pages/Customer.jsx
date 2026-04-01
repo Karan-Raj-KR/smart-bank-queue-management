@@ -50,8 +50,13 @@ export default function Customer() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!name || !phone || !service) {
+    if (!name.trim() || !phone.trim() || !service) {
       setError('Please fill in all mandatory fields.')
+      return
+    }
+    const cleanedPhone = phone.replace(/[\s\-\(\)]/g, '')
+    if (!/^\+?\d{7,15}$/.test(cleanedPhone)) {
+      setError('Please enter a valid phone number (7-15 digits).')
       return
     }
 
@@ -70,27 +75,29 @@ export default function Customer() {
 
   // Calculate specific wait time/position based on current token
   const getMyWaitDetails = () => {
-    if (!queueStatus || !tokenInfo) return { position: `--`, waitTime: `--`, status: 'WAITING' }
-    
-    // Find my token in waiting list
-    const myPosIndex = queueStatus.waiting_queue.findIndex(t => t.token_number === tokenInfo.token_number)
-    
-    // See if I'm currently calling at any counter
-    const isCalledAt = Object.values(queueStatus.counters).find(t => t && t.token_number === tokenInfo.token_number)
+    if (!queueStatus || !tokenInfo) return { position: '--', waitTime: '--', status: 'WAITING' }
+
+    // Check if currently being served at a counter
+    const counterEntries = Object.values(queueStatus.counters || {})
+    const isCalledAt = counterEntries.find(t => t && t.token_number === tokenInfo.token_number)
 
     if (isCalledAt) {
       return { status: 'CALLED', counter: isCalledAt.counter_id }
     }
 
+    // Find position in waiting queue
+    const waitingQueue = queueStatus.waiting_queue || []
+    const myPosIndex = waitingQueue.findIndex(t => t.token_number === tokenInfo.token_number)
+
     if (myPosIndex !== -1) {
-      return { 
-        position: myPosIndex + 1, 
-        waitTime: `${Math.max(5, (myPosIndex + 1) * 5)} mins`, 
-        status: 'WAITING' 
+      return {
+        position: myPosIndex + 1,
+        waitTime: `${Math.max(5, (myPosIndex + 1) * 5)} mins`,
+        status: 'WAITING'
       }
     }
 
-    return { position: `--`, waitTime: `--`, status: 'UNKNOWN' }
+    return { position: '--', waitTime: '--', status: 'COMPLETED' }
   }
 
   return (
@@ -266,7 +273,14 @@ export default function Customer() {
                       <p className="text-[11px] font-bold tracking-widest uppercase">{tokenInfo.service_type} • {isPriority ? 'PRIORITY' : 'REGULAR'}</p>
                     </div>
 
-                    <div className="mt-14 pt-8 bg-surface-elevated mx-[-1px] border-t border-slate-200">
+                    {tokenInfo.qr_code && (
+                      <div className="mt-8 flex flex-col items-center">
+                        <p className="text-[10px] text-primary-400 font-bold tracking-widest uppercase mb-3">Scan to verify</p>
+                        <img src={tokenInfo.qr_code} alt="Token QR Code" className="w-36 h-36 rounded-lg" />
+                      </div>
+                    )}
+
+                    <div className="mt-8 pt-8 bg-surface-elevated mx-[-1px] border-t border-slate-200">
                       {isCalled ? (
                         <div className="animate-slide-up pb-8">
                           <p className="text-primary-500 text-xs tracking-widest uppercase font-bold mb-4">Please proceed immediately to</p>

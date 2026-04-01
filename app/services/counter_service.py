@@ -10,6 +10,7 @@ from app.models.service_type import ServiceType
 from app.models.token import Token, TokenStatus
 from app.schemas.counter import (
     CallNextResponse,
+    CounterServing,
     QueueEntry,
     QueueStatusResponse,
     TokenInfo,
@@ -100,32 +101,56 @@ async def call_next_token(counter_id: int, db: AsyncSession) -> CallNextResponse
 
 
 async def get_queue_status(branch_id: int, db: AsyncSession) -> QueueStatusResponse:
+    # Waiting tokens ordered by priority then time
     result = await db.execute(
         select(Token)
         .where(
             Token.branch_id == branch_id,
             Token.status == TokenStatus.WAITING,
         )
-        .order_by(Token.service_type, Token.is_priority.desc(), Token.issued_at.asc())
+        .order_by(Token.is_priority.desc(), Token.issued_at.asc())
     )
     tokens = result.scalars().all()
 
-    queue: dict[str, list[QueueEntry]] = {}
-    position_counters: dict[str, int] = {}
-
-    for token in tokens:
-        stype = token.service_type.value
-        if stype not in queue:
-            queue[stype] = []
-            position_counters[stype] = 0
-        position_counters[stype] += 1
-        queue[stype].append(
+    waiting_queue = []
+    for i, token in enumerate(tokens):
+        waiting_queue.append(
             QueueEntry(
                 token_number=token.token_number,
+                service_type=token.service_type.value,
                 is_priority=token.is_priority,
-                position=position_counters[stype],
+                position=i + 1,
                 issued_at=token.issued_at,
             )
         )
 
-    return QueueStatusResponse(branch_id=branch_id, queue=queue)
+    # Currently serving at each counter
+    counter_result = await db.execute(
+        select(Counter).where(Counter.branch_id == branch_id, Counter.is_active == True)
+    )
+    counters_list = counter_result.scalars().all()
+
+    counters: dict[int, CounterServing | None] = {}
+    for counter in counters_list:
+        token_result = await db.execute(
+            select(Token).where(
+                Token.counter_id == counter.id,
+                Token.status == TokenStatus.CALLED,
+            )
+        )
+        serving_token = token_result.scalar_one_or_none()
+        if serving_token:
+            counters[counter.id] = CounterServing(
+                token_number=serving_token.token_number,
+                service_type=serving_token.service_type.value,
+                is_priority=serving_token.is_priority,
+                counter_id=counter.id,
+            )
+        else:
+            counters[counter.id] = None
+
+    return QueueStatusResponse(
+        branch_id=branch_id,
+        waiting_queue=waiting_queue,
+        counters=counters,
+    )

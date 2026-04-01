@@ -11,3 +11,4 @@ twilio==9.4.0
 scikit-learn==1.6.1
 joblib==1.4.2
 psycopg2-binary
+qrcode[pil]==8.0
