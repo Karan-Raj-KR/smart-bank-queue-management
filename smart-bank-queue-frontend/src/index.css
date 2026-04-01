@@ -1,0 +1,101 @@
+@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@400;500;600;700&family=Jost:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-surface text-text-main font-sans;
+    margin: 0;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, .serif-heading {
+    @apply font-serif;
+  }
+
+  input, select, textarea {
+    @apply bg-white border border-slate-200 text-text-main placeholder-slate-400;
+  }
+
+  input:focus, select:focus, textarea:focus {
+    @apply outline-none ring-[3px] ring-primary-900/10 border-primary-900;
+  }
+}
+
+@layer components {
+  /* The mobile app constrainer */
+  .app-container {
+    @apply max-w-[430px] mx-auto min-h-[100dvh] relative bg-surface overflow-x-hidden shadow-2xl overflow-y-auto;
+  }
+
+  .luxury-card {
+    @apply bg-white rounded-xl p-6 shadow-luxury-md transition-all duration-200;
+  }
+
+  .luxury-card:hover {
+    @apply shadow-luxury-lg -translate-y-[2px];
+  }
+
+  .btn-primary {
+    @apply bg-cta hover:opacity-90 active:translate-y-0 active:scale-[0.98]
+           text-white font-semibold rounded-lg px-6 py-4
+           transition-all duration-200 ease-out shadow-luxury-sm hover:shadow-luxury-md
+           disabled:opacity-50 disabled:cursor-not-allowed
+           disabled:active:scale-100 disabled:hover:opacity-50 flex items-center justify-center gap-2;
+  }
+
+  .btn-secondary {
+    @apply bg-transparent hover:bg-slate-50
+           text-primary-900 font-semibold rounded-lg px-6 py-4 border-2 border-primary-900
+           transition-all duration-200 ease-out active:scale-[0.98]
+           flex items-center justify-center gap-2;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent hover:bg-slate-100 active:bg-slate-200
+           text-slate-600 hover:text-primary-900 font-medium rounded-lg px-4 py-2.5
+           transition-all duration-200;
+  }
+
+  .skeleton {
+    @apply bg-slate-200 rounded-lg animate-pulse;
+  }
+
+  .page-enter {
+    animation: pageEnter 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes pageEnter {
+    0% {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 23, 42, 0.4);
+}
