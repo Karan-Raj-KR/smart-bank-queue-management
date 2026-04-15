@@ -3,7 +3,6 @@ import axios from 'axios';
 const PROD_URL = 'https://smart-bank-queue-management-production.up.railway.app';
 const baseURL = import.meta.env.DEV ? '/api' : PROD_URL;
 
-
 const api = axios.create({
   baseURL,
   timeout: 15000,
@@ -16,7 +15,12 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-export async function generateToken(name, phone, serviceType, isPriority, branchId = 1) {
+export async function getBranches() {
+  const response = await api.get('/branches');
+  return response.data;
+}
+
+export async function generateToken(name, phone, serviceType, isPriority, branchId) {
   const response = await api.post('/tokens/generate', {
     customer_name: name,
     phone: phone,
@@ -27,7 +31,7 @@ export async function generateToken(name, phone, serviceType, isPriority, branch
   return response.data;
 }
 
-export async function getQueueStatus(branchId = 1) {
+export async function getQueueStatus(branchId) {
   const response = await api.get(`/counters/queue/${branchId}`);
   return response.data;
 }
@@ -39,19 +43,29 @@ export async function callNextToken(counterId) {
   return response.data;
 }
 
-export async function getAnalyticsSummary(branchId = 1) {
+export async function getAnalyticsSummary(branchId) {
   const response = await api.get(`/analytics/${branchId}/summary`);
   return response.data;
 }
 
-export async function getAnalyticsHourly(branchId = 1) {
+export async function getAnalyticsHourly(branchId) {
   const response = await api.get(`/analytics/${branchId}/hourly`);
   return response.data;
 }
 
-export async function getAnalyticsServiceBreakdown(branchId = 1) {
+export async function getAnalyticsServiceBreakdown(branchId) {
   const response = await api.get(`/analytics/${branchId}/service-breakdown`);
   return response.data;
+}
+
+/**
+ * Returns a WebSocket URL for the given branch.
+ * Works in both dev and production — always connects directly
+ * to the Railway backend (Vite's proxy does not support WS).
+ */
+export function getWsUrl(branchId) {
+  const host = PROD_URL.replace(/^https?:\/\//, '');
+  return `wss://${host}/ws/${branchId}`;
 }
 
 export async function checkHealth() {

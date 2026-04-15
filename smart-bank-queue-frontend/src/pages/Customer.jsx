@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { ArrowLeft, CheckCircle2, Loader2, Clock, MapPin, UserSquare, Phone, BellRing } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
-import { generateToken, getQueueStatus } from '../api'
+import { useNavigate, useLocation } from 'react-router-dom'
+import { generateToken, getWsUrl } from '../api'
 
 import { Banknote, Wallet, FileText, Building2 } from 'lucide-react'
 
@@ -14,8 +14,12 @@ const SERVICES = [
 
 export default function Customer() {
   const navigate = useNavigate()
-  
-  // State A
+  const location = useLocation()
+
+  // Read branchId passed from Home via router state; fall back to 1 if missing
+  const branchId = location.state?.branchId ?? 1
+
+  // --- Form state ---
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [service, setService] = useState('')
@@ -23,30 +27,101 @@ export default function Customer() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // State B
+  // --- Token / queue state ---
   const [tokenInfo, setTokenInfo] = useState(null)
-  
-  // Real-time Queue Status
   const [queueStatus, setQueueStatus] = useState(null)
 
+  // --- WebSocket ref (persists across renders without triggering re-render) ---
+  const wsRef = useRef(null)
+
+  // Open WebSocket when a token has been issued; close it when component unmounts
+  // or when the user goes back (tokenInfo cleared).
   useEffect(() => {
-    let interval;
-    if (tokenInfo) {
-      const fetchStatus = async () => {
-        try {
-          const data = await getQueueStatus(1) // branchId 1
-          setQueueStatus(data)
-        } catch (e) {
-          console.error("Failed to fetch queue status")
-        }
+    if (!tokenInfo) {
+      // No active token — close any existing connection and bail out
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
       }
-      
-      fetchStatus()
-      interval = setInterval(fetchStatus, 10000)
+      return
     }
-    
-    return () => clearInterval(interval)
-  }, [tokenInfo])
+
+    const url = getWsUrl(branchId)
+    const ws = new WebSocket(url)
+    wsRef.current = ws
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        // The backend broadcasts { event, token_number, counter_id } on every call-next.
+        // We store the full payload so getMyWaitDetails() can check "CALLED" status.
+        setQueueStatus((prev) => ({
+          ...prev,
+          _lastEvent: data,
+        }))
+      } catch {
+        // ignore malformed frames
+      }
+    }
+
+    ws.onerror = (e) => {
+      console.warn('Customer WS error', e)
+    }
+
+    return () => {
+      ws.close()
+      wsRef.current = null
+    }
+  }, [tokenInfo, branchId])
+
+  // Additionally poll /counters/queue once after token generation so the
+  // waiting_queue array is immediately populated (the WS only fires on
+  // call-next events, not on initial position queries).
+  // A lightweight fallback poll every 15 s keeps position numbers accurate
+  // if WS misses a beat — without the previous aggressive 10 s interval.
+  useEffect(() => {
+    if (!tokenInfo) return
+
+    let alive = true
+    const poll = async () => {
+      try {
+        // Import inline to avoid circular-dependency issues at module level
+        const { getQueueStatus } = await import('../api')
+        const data = await getQueueStatus(branchId)
+        if (alive) setQueueStatus(data)
+      } catch {
+        // ignore
+      }
+    }
+
+    poll() // immediate first fetch
+    const id = setInterval(poll, 15000) // gentle background sync
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [tokenInfo, branchId])
+
+  // Merge WS event into queueStatus: when a token_called event arrives,
+  // update the counters map so getMyWaitDetails() sees CALLED status instantly.
+  useEffect(() => {
+    const ev = queueStatus?._lastEvent
+    if (!ev || ev.event !== 'token_called') return
+
+    setQueueStatus((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        counters: {
+          ...prev.counters,
+          [ev.counter_id]: {
+            token_number: ev.token_number,
+            counter_id: ev.counter_id,
+          },
+        },
+      }
+    })
+  }, [queueStatus?._lastEvent])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -62,10 +137,10 @@ export default function Customer() {
 
     setLoading(true)
     setError('')
-    
+
     try {
-      const data = await generateToken(name, phone, service, isPriority, 1)
-      setTokenInfo(data) // Wait for UI transition
+      const data = await generateToken(name, phone, service, isPriority, branchId)
+      setTokenInfo(data)
     } catch (err) {
       setError(err?.response?.data?.detail || 'Failed to generate token. Please try again.')
     } finally {
@@ -73,27 +148,39 @@ export default function Customer() {
     }
   }
 
-  // Calculate specific wait time/position based on current token
+  // Derive live position and wait time from queue snapshot
   const getMyWaitDetails = () => {
-    if (!queueStatus || !tokenInfo) return { position: '--', waitTime: '--', status: 'WAITING' }
+    if (!queueStatus || !tokenInfo) {
+      // Fall back to ML estimate from initial token response while WS hasn't fired
+      return {
+        position: '--',
+        waitTime: tokenInfo ? `${tokenInfo.estimated_wait_minutes} min` : '--',
+        status: 'WAITING',
+      }
+    }
 
     // Check if currently being served at a counter
     const counterEntries = Object.values(queueStatus.counters || {})
-    const isCalledAt = counterEntries.find(t => t && t.token_number === tokenInfo.token_number)
-
+    const isCalledAt = counterEntries.find(
+      (t) => t && t.token_number === tokenInfo.token_number
+    )
     if (isCalledAt) {
       return { status: 'CALLED', counter: isCalledAt.counter_id }
     }
 
     // Find position in waiting queue
     const waitingQueue = queueStatus.waiting_queue || []
-    const myPosIndex = waitingQueue.findIndex(t => t.token_number === tokenInfo.token_number)
+    const myPosIndex = waitingQueue.findIndex((t) => t.token_number === tokenInfo.token_number)
 
     if (myPosIndex !== -1) {
+      // Use ML-predicted wait time from token payload; scale it by remaining position
+      // relative to the original position at issuance so the number stays sensible.
+      const mlEstimate = tokenInfo.estimated_wait_minutes ?? (myPosIndex + 1) * 5
+      const scaledWait = Math.max(1, Math.round((mlEstimate / (tokenInfo.position || 1)) * (myPosIndex + 1)))
       return {
         position: myPosIndex + 1,
-        waitTime: `${Math.max(5, (myPosIndex + 1) * 5)} mins`,
-        status: 'WAITING'
+        waitTime: `${scaledWait} min`,
+        status: 'WAITING',
       }
     }
 
@@ -102,15 +189,15 @@ export default function Customer() {
 
   return (
     <div className="flex flex-col min-h-[100dvh] bg-surface relative">
-      
-      {/* Header NavBar Minimalist */}
+
+      {/* Header */}
       <div className="flex items-center gap-4 px-6 py-8 bg-surface sticky top-0 z-40">
-        <button 
+        <button
           onClick={() => {
             if (tokenInfo) {
-               setTokenInfo(null)
+              setTokenInfo(null)
             } else {
-               navigate(-1)
+              navigate(-1)
             }
           }}
           className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-colors border border-slate-200 shadow-luxury-sm"
@@ -121,13 +208,15 @@ export default function Customer() {
           <h1 className="text-2xl font-bold tracking-tighter text-primary-900 leading-tight serif-heading">
             {tokenInfo ? 'Your Live Ticket' : 'Join Queue'}
           </h1>
-          <p className="text-[10px] text-primary-500 font-bold uppercase tracking-widest mt-0.5">Branch #1 (Main)</p>
+          <p className="text-[10px] text-primary-500 font-bold uppercase tracking-widest mt-0.5">
+            Branch #{branchId}
+          </p>
         </div>
       </div>
 
       <div className="flex-1 px-6 pb-12 page-enter max-w-[430px] mx-auto w-full pt-4">
         {!tokenInfo ? (
-          // STATE A: FORM (Exaggerated Minimalism)
+          // ── STATE A: FORM ──────────────────────────────────────────────────────
           <form onSubmit={handleSubmit} className="flex flex-col gap-8 w-full">
             {error && (
               <div className="px-5 py-4 bg-red-50 border-l-4 border-red-500 text-red-900 text-sm font-semibold flex items-center gap-3">
@@ -150,7 +239,7 @@ export default function Customer() {
                     className="w-full pl-12 pr-4 py-4 rounded-xl font-medium tracking-wide transition-colors"
                     placeholder="Enter your name"
                     value={name}
-                    onChange={e => setName(e.target.value)}
+                    onChange={(e) => setName(e.target.value)}
                   />
                 </div>
               </label>
@@ -168,7 +257,7 @@ export default function Customer() {
                     className="w-full pl-12 pr-4 py-4 rounded-xl font-medium tracking-wide transition-colors"
                     placeholder="e.g. +1 234 567 89"
                     value={phone}
-                    onChange={e => setPhone(e.target.value)}
+                    onChange={(e) => setPhone(e.target.value)}
                   />
                 </div>
               </label>
@@ -177,21 +266,22 @@ export default function Customer() {
             <div className="space-y-4 pt-2">
               <span className="text-xs font-bold uppercase tracking-[0.1em] text-primary-900 block">Service Required</span>
               <div className="grid grid-cols-2 gap-4">
-                {SERVICES.map(s => (
+                {SERVICES.map((s) => (
                   <button
                     key={s.id}
                     type="button"
                     onClick={() => setService(s.id)}
                     className={`
                       relative p-5 rounded-xl text-left border-2 transition-all duration-200 flex flex-col items-center justify-center gap-3 text-center overflow-hidden cursor-pointer
-                      ${service === s.id 
-                        ? 'bg-primary-50 border-primary-900 text-primary-900 shadow-luxury-md -translate-y-[2px]' 
-                        : 'bg-white border-transparent text-primary-500 hover:border-slate-200 hover:shadow-luxury-sm'
-                      }
+                      ${service === s.id
+                        ? 'bg-primary-50 border-primary-900 text-primary-900 shadow-luxury-md -translate-y-[2px]'
+                        : 'bg-white border-transparent text-primary-500 hover:border-slate-200 hover:shadow-luxury-sm'}
                     `}
                   >
-                    <s.icon size={36} strokeWidth={1.5} className={service === s.id ? 'text-primary-900' : 'text-primary-300 group-hover:text-primary-500 transition-colors'} />
-                    <span className={`text-[11px] font-bold tracking-widest uppercase ${service === s.id ? 'text-primary-900' : 'text-primary-600'}`}>{s.label}</span>
+                    <s.icon size={36} strokeWidth={1.5} className={service === s.id ? 'text-primary-900' : 'text-primary-300'} />
+                    <span className={`text-[11px] font-bold tracking-widest uppercase ${service === s.id ? 'text-primary-900' : 'text-primary-600'}`}>
+                      {s.label}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -200,22 +290,16 @@ export default function Customer() {
             <div className="mt-4 luxury-card !py-5 flex items-center justify-between border-t-4 border-cta">
               <div>
                 <span className="text-sm font-bold text-primary-900 block tracking-tight">Priority Check-in</span>
-                <span className="text-[10px] uppercase tracking-wider text-primary-500 font-semibold mt-1 block">Senior Citizens / Differently Abled</span>
+                <span className="text-[10px] uppercase tracking-wider text-primary-500 font-semibold mt-1 block">
+                  Senior Citizens / Differently Abled
+                </span>
               </div>
-              
-              {/* Luxury Style Toggle */}
-              <button 
+              <button
                 type="button"
                 onClick={() => setIsPriority(!isPriority)}
-                className={`
-                  w-14 h-8 rounded-full transition-colors relative shadow-inner cursor-pointer
-                  ${isPriority ? 'bg-cta' : 'bg-slate-200'}
-                `}
+                className={`w-14 h-8 rounded-full transition-colors relative shadow-inner cursor-pointer ${isPriority ? 'bg-cta' : 'bg-slate-200'}`}
               >
-                <div className={`
-                  w-6 h-6 bg-white rounded-full absolute top-1 transition-all duration-300 shadow-luxury-sm
-                  ${isPriority ? 'left-7 pointer-events-none' : 'left-1 pointer-events-none'}
-                `} />
+                <div className={`w-6 h-6 bg-white rounded-full absolute top-1 transition-all duration-300 shadow-luxury-sm pointer-events-none ${isPriority ? 'left-7' : 'left-1'}`} />
               </button>
             </div>
 
@@ -238,10 +322,10 @@ export default function Customer() {
             </button>
           </form>
         ) : (
-          // STATE B: TICKET DISPLAY (Exaggerated Minimalism)
+          // ── STATE B: LIVE TICKET ───────────────────────────────────────────────
           (() => {
-            const details = getMyWaitDetails();
-            const isCalled = details.status === 'CALLED';
+            const details = getMyWaitDetails()
+            const isCalled = details.status === 'CALLED'
 
             return (
               <div className="flex flex-col h-full items-center animate-fade-in w-full text-center">
@@ -250,10 +334,11 @@ export default function Customer() {
                     luxury-card !p-0 !pb-10 transition-all duration-500 overflow-hidden w-full relative
                     ${isCalled ? 'border-4 border-cta shadow-2xl scale-[1.02]' : 'border border-slate-200'}
                   `}>
-                    
+
+                    {/* Ticket header strip */}
                     <div className="absolute top-0 w-full h-12 bg-primary-50 flex items-center justify-between px-6 border-b border-slate-100">
-                       <span className="text-[10px] font-bold uppercase tracking-widest text-primary-600">Smart Bank Queue</span>
-                       <div className={`
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-primary-600">Smart Bank Queue</span>
+                      <div className={`
                         px-3 py-1 rounded text-[9px] font-black tracking-widest uppercase flex items-center gap-1.5
                         ${isCalled ? 'bg-cta text-white animate-pulse' : 'bg-slate-200 text-primary-900'}
                       `}>
@@ -262,17 +347,23 @@ export default function Customer() {
                       </div>
                     </div>
 
+                    {/* Token number */}
                     <div className="mt-20 mb-6">
-                      <p className="text-primary-400 font-bold tracking-[0.2em] text-xs mb-3 uppercase">Priority Ticket</p>
+                      <p className="text-primary-400 font-bold tracking-[0.2em] text-xs mb-3 uppercase">
+                        {isPriority ? 'Priority Ticket' : 'Standard Ticket'}
+                      </p>
                       <h2 className={`text-[5rem] md:text-[6.5rem] leading-none serif-heading font-bold tracking-tighter ${isCalled ? 'text-cta' : 'text-primary-900'}`}>
                         {tokenInfo.token_number}
                       </h2>
                     </div>
-                    
+
                     <div className="inline-flex items-center justify-center bg-transparent border-2 border-primary-900 text-primary-900 rounded-full px-5 py-2 mt-4">
-                      <p className="text-[11px] font-bold tracking-widest uppercase">{tokenInfo.service_type} • {isPriority ? 'PRIORITY' : 'REGULAR'}</p>
+                      <p className="text-[11px] font-bold tracking-widest uppercase">
+                        {tokenInfo.service_type} • {isPriority ? 'PRIORITY' : 'REGULAR'}
+                      </p>
                     </div>
 
+                    {/* QR code */}
                     {tokenInfo.qr_code && (
                       <div className="mt-8 flex flex-col items-center">
                         <p className="text-[10px] text-primary-400 font-bold tracking-widest uppercase mb-3">Scan to verify</p>
@@ -280,6 +371,7 @@ export default function Customer() {
                       </div>
                     )}
 
+                    {/* Wait / counter section */}
                     <div className="mt-8 pt-8 bg-surface-elevated mx-[-1px] border-t border-slate-200">
                       {isCalled ? (
                         <div className="animate-slide-up pb-8">
@@ -287,27 +379,28 @@ export default function Customer() {
                           <p className="text-5xl font-black text-primary-900 serif-heading">COUNTER {details.counter}</p>
                         </div>
                       ) : (
-                         <div className="grid grid-cols-2 gap-6 divide-x divide-slate-300 px-6 pb-2">
+                        <div className="grid grid-cols-2 gap-6 divide-x divide-slate-300 px-6 pb-2">
                           <div className="flex flex-col items-center gap-2">
-                             <MapPin size={24} className="text-primary-400 mb-1" />
-                             <span className="text-4xl font-bold text-primary-900 serif-heading">{details.position}</span>
-                             <span className="text-[10px] text-primary-500 font-bold uppercase tracking-widest mt-1">in line</span>
+                            <MapPin size={24} className="text-primary-400 mb-1" />
+                            <span className="text-4xl font-bold text-primary-900 serif-heading">{details.position}</span>
+                            <span className="text-[10px] text-primary-500 font-bold uppercase tracking-widest mt-1">in line</span>
                           </div>
                           <div className="flex flex-col items-center gap-2">
-                             <Clock size={24} className="text-cta mb-1" />
-                             <span className="text-4xl font-bold text-primary-900 serif-heading">{details.waitTime}</span>
-                             <span className="text-[10px] text-primary-500 font-bold uppercase tracking-widest mt-1">est. wait</span>
+                            <Clock size={24} className="text-cta mb-1" />
+                            {/* ✅ FIX 2: ML-predicted wait time from API payload */}
+                            <span className="text-4xl font-bold text-primary-900 serif-heading">{details.waitTime}</span>
+                            <span className="text-[10px] text-primary-500 font-bold uppercase tracking-widest mt-1">est. wait</span>
                           </div>
-                         </div>
+                        </div>
                       )}
                     </div>
                   </div>
                 </div>
 
                 <p className="text-xs text-primary-500 font-bold tracking-wide px-8 text-center leading-relaxed">
-                  {isCalled 
-                    ? "Your number has been called! Please present this screen." 
-                    : "Wait in the seating area. We will alert you when it's your turn."}
+                  {isCalled
+                    ? 'Your number has been called! Please present this screen.'
+                    : 'Wait in the seating area. We will alert you when it\'s your turn.'}
                 </p>
               </div>
             )

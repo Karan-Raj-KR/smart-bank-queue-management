@@ -5,4 +5,11 @@ nixPkgs = ["python311", "gcc"]
 cmds = ["pip install -r requirements.txt"]
 
 [start]
-cmd = "alembic upgrade head && python ml/train.py && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+# Run migrations and train the ML model, then boot FastAPI + Celery worker
+# concurrently via a simple shell background job.
+cmd = """
+alembic upgrade head && \
+python ml/train.py && \
+celery -A app.tasks.notifications worker --loglevel=info --concurrency=2 & \
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+"""

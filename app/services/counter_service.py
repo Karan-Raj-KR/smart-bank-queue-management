@@ -15,11 +15,12 @@ from app.schemas.counter import (
     QueueStatusResponse,
     TokenInfo,
 )
-from app.tasks.notifications import send_sms
+from app.tasks.notifications import send_sms_task
 
 
-async def _send_sms_notification(to_phone: str, token_number: str) -> None:
-    await send_sms(
+def _send_sms_notification(to_phone: str, token_number: str) -> None:
+    """Dispatch an SMS notification as a Celery background task."""
+    send_sms_task.delay(
         to_phone,
         f"Your token {token_number} will be called soon. Please proceed to the bank.",
     )
@@ -95,7 +96,7 @@ async def call_next_token(counter_id: int, db: AsyncSession) -> CallNextResponse
         )
         upcoming_token = result.scalar_one_or_none()
         if upcoming_token and upcoming_token.customer.phone:
-            await _send_sms_notification(upcoming_token.customer.phone, upcoming_token.token_number)
+            _send_sms_notification(upcoming_token.customer.phone, upcoming_token.token_number)
 
     return response
 
